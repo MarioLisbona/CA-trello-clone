@@ -1,31 +1,20 @@
 from flask import Flask, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from datetime import date
+from flask_marshmallow import Marshmallow
 
 app = Flask(__name__)
-
-from flask_marshmallow import Marshmallow
-ma = Marshmallow(app)
+app.config['JSON_SORT_KEYS'] = False
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://trello_dev:password123@127.0.0.1:5432/trello'
 
 db = SQLAlchemy(app)
 
-#create the Card Schema with Marshmallow, it will provide the serialization needed for converting the data into JSON
-class CardSchema(ma.Schema):
-    class Meta:
-        #fields to expose
-        fields = ('id', 'title', 'description', 'date', 'status', 'priority')
-    
-#single card schema when a single card is retrieved
-card_schema = CardSchema()
-
-#multiple card schema, when many cards need to be retrieved
-cards_schema = CardSchema(many=True)
-
+ma = Marshmallow(app)
 
 class Card(db.Model):
     __tablename__ = 'cards'
+
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100))
     description = db.Column(db.Text)
@@ -33,61 +22,117 @@ class Card(db.Model):
     status = db.Column(db.String)
     priority = db.Column(db.String)
 
-#defining a custom cli (terminal) command
+class CardSchema(ma.Schema):
+    class Meta:
+        fields = (
+            'id', 'title', 'description', 'date', 'status', 'priority'
+        )
+        ordered = True
+
+# Define a custom CLI (terminal) command
 @app.cli.command('create')
 def create_db():
     db.create_all()
-    print('Tables created successfully!')
-
-@app.cli.command('seed')
-def seed():
-    card1 = Card(
-        title = 'Start the project',
-        description = 'Stage 1 - Creating the database',
-        status = 'To-do',
-        priority = 'High',
-        date = date.today()
-    )
-
-    card2 = Card(
-        title = 'Select vintal features',
-        description = 'Stage 2 - Creating the front end',
-        status = 'To-do',
-        priority = 'Medium',
-        date = date.today()
-    )
-
-    card3 = Card(
-        title = 'Start the project',
-        description = 'Stage 3 - coding the backend',
-        status = 'To-do',
-        priority = 'Low',
-        date = date.today()
-    )
-
-    db.session.add(card1)
-    db.session.add(card2)
-    db.session.add(card3)
-    db.session.commit()
-    print('Tables seeded successfully!')
+    print("Tables created")
 
 @app.cli.command('drop')
-def drop():
+def drop_db():
     db.drop_all()
-    print('Tables dropped successfully!')
+    print("Tables dropped")
+
+@app.cli.command('seed')
+def seed_db():
+    cards = [
+        Card(
+            title = 'Start the project',
+            description = 'Stage 1 - Create the database',
+            status = 'To Do',
+            priority = 'High',
+            date = date.today()
+        ),
+        Card(
+            title = "SQLAlchemy",
+            description = "Stage 2 - Integrate ORM",
+            status = "Ongoing",
+            priority = "High",
+            date = date.today()
+        ),
+        Card(
+            title = "ORM Queries",
+            description = "Stage 3 - Implement several queries",
+            status = "Ongoing",
+            priority = "Medium",
+            date = date.today()
+        ),
+        Card(
+            title = "Marshmallow",
+            description = "Stage 4 - Implement Marshmallow to jsonify models",
+            status = "Ongoing",
+            priority = "Medium",
+            date = date.today()
+        )
+    ]
+
+    db.session.add_all(cards) #pylint:disable=Pylint(E1101:no-member)
+    db.session.commit() #pylint:disable=Pylint(E1101:no-member)
+    print('Tables seeded')
+
+@app.cli.command('first_card')
+def all_card():
+    ###########legacy version##############
+    # #select * from cards limit 1
+    # card = Card.query.first()
+    # print(card.__dict__)
+
+    ###########New API version##############
+    stmt = db.select(Card).limit(1)
+    card = db.session.scalar(stmt)
+    print(card.__dict__)
+    # print(card)
+
+
+@app.cli.command('all_cards')
+def all_cards():
+    ###########legacy version##############
+    #select * from cards
+    # cards = Card.query.all()
+    # print(cards)
+
+    ###########New API version##############
+    # stmt = db.select(Card).where(Card.id > 2, Card.priority == 'Medium')
+    # stmt = db.select(Card).where(db.or_(Card.status == 'To Do', Card.priority == 'High'))
+
+    #filter_by can be used instead of where() for simpler query on one table
+    # stmt = db.select(Card).where(db.or_(Card.status == 'To Do'))
+    # stmt = db.select(Card).filter_by(status = 'To Do')
     
+    #order by
+    stmt = db.select(Card).order_by(Card.priority.desc(), Card.title)
+
+    cards = db.session.scalars(stmt)
+
+    print(jsonify(cards))
+    # # print(stmt)
+    # for card in cards:
+    #     # print(card.__dict__)
+    #     print(f'Title:\t {card.title}\t Priority:  {card.priority}')
+
+
+@app.cli.command('count_ongoing')
+def count_ongoing():
+    stmt = db.select(db.func.count()).select_from(Card).filter_by(status='Ongoing')
+    cards = db.session.scalar(stmt)
+    print(cards)
+
+
 @app.route('/')
 def index():
-    return 'Hello World'
+    return "Hello World!"
 
-@app.route('/cards/', methods=['GET'])
-def get_cards():
-    #retrieve all the cards from the database table 'cards'
-    cards_list = Card.query.all()
+@app.route('/cards/')
+def all_cards():
+    stmt = db.select(Card).order_by(Card.priority.desc(), Card.title)
+    cards = db.session.scalars(stmt)
 
-    #Convert the cards from the database into a JSON format and store them in result
-    result = cards_schema.dump(cards_list)
-
-    #return the data in json format
-    return jsonify(result)
+    return CardSchema(many=True).dump(cards)
 
